@@ -1,211 +1,223 @@
-import React, { useState, useEffect, useMemo, useRef, useContext } from "react";
+import React, { useState, useContext } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
   Alert,
-  TextInput,
+  Button,
 } from "react-native";
-import { MaterialIcons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
+import { CameraView, useCameraPermissions } from "expo-camera";
 import { AuthContext } from "../context/AuthContext";
 
-const HomeScreen = ({ navigation }) => {
+export default function HomeScreen() {
+  const navigation = useNavigation();
   const { userData, logout } = useContext(AuthContext);
 
-  // 2. STATE UNTUK STATUS TOMBOL CHECK-IN
+  const [permission, requestPermission] = useCameraPermissions();
+
+  // State untuk menyimpan data hasil scan QR
+  const [scannedData, setScannedData] = useState(null);
+
+  // State untuk mengontrol scanner aktif / terkunci
+  const [isScanning, setIsScanning] = useState(true);
+
   const [isCheckedIn, setIsCheckedIn] = useState(false);
 
-  // 3. STATE UNTUK JAM DIGITAL
-  const [currentTime, setCurrentTime] = useState("Memuat jam...");
+  // GANTI DENGAN IP LAPTOP KAMU
+  const BASE_URL = "http://10.1.13.14:8080/api/presensi";
 
-  // 4. STATE & REF UNTUK CATATAN
-  const [note, setNote] = useState("");
-  const noteInputRef = useRef(null);
+  // Jika permission masih loading
+  if (!permission) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.infoText}>Memuat perizinan kamera...</Text>
+      </View>
+    );
+  }
 
-  // Simulasi stats karena data dipindah ke HistoryScreen
-  const attendanceStats = useMemo(() => {
-    return { totalPresent: 12, totalAbsent: 2 };
-  }, []);
+  // Jika user belum memberikan izin kamera
+  if (!permission.granted) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.infoText}>
+          Aplikasi butuh akses kamera untuk memindai QR Code Presensi Dosen!
+        </Text>
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date().toLocaleTimeString("id-ID"));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+        <TouchableOpacity
+          style={styles.buttonRequest}
+          onPress={requestPermission}
+        >
+          <Text style={styles.buttonText}>Aktifkan Kamera</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-  const handleCheckIn = () => {
-    if (isCheckedIn) return Alert.alert("Perhatian", "Anda sudah Check In.");
+  // Fungsi saat QR Code terdeteksi kamera
+  const handleBarCodeScanned = ({ type, data }) => {
+    // Jika sedang terkunci, abaikan scan agar tidak looping
+    if (!isScanning) return;
 
-    if (note.trim() === "") {
-      Alert.alert("Peringatan", "Catatan kehadiran wajib diisi!");
-      noteInputRef.current.focus();
-      return;
+    // Kunci scanner
+    setIsScanning(false);
+
+    try {
+      // Ubah teks JSON dari QR Code menjadi object JavaScript
+      const qrData = JSON.parse(data);
+      setScannedData(qrData);
+
+      Alert.alert(
+        "QR Code Terdeteksi",
+        `Mata Kuliah: ${qrData.kodeMk}\nPertemuan: ${qrData.pertemuanKe}\nRuangan: ${qrData.ruangan}\n\nLanjutkan Presensi (Check-In)?`,
+        [
+          {
+            text: "Batal",
+            onPress: () => {
+              setIsScanning(true);
+              setScannedData(null);
+            },
+            style: "cancel",
+          },
+          {
+            text: "Ya, Check In",
+            onPress: () => handleSubmitPresensi(qrData),
+          },
+        ],
+      );
+    } catch (error) {
+      Alert.alert(
+        "QR Tidak Valid",
+        "Pastikan Anda memindai QR Code Presensi Dosen.",
+      );
+      setIsScanning(true);
     }
+  };
 
-    setIsCheckedIn(true);
-    Alert.alert("Sukses", `Berhasil Check In pada pukul ${currentTime}`);
+  // Fungsi kirim data presensi ke API Spring Boot
+  const handleSubmitPresensi = async (qrData) => {
+    const now = new Date();
+
+    const payload = {
+      kodeMk: qrData.kodeMk,
+      course: qrData.course || "Mobile Programming",
+      nimMhs: userData?.mhsNim,
+      pertemuanKe: qrData.pertemuanKe,
+      date: now.toISOString().split("T")[0],
+      jamPresensi: now.toLocaleTimeString("id-ID", { hour12: false }),
+      status: "Present",
+      ruangan: qrData.ruangan,
+      dosenPengampu: qrData.dosenPengampu || "Tim Dosen TRPL",
+    };
+
+    try {
+      const response = await fetch(BASE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        setIsCheckedIn(true);
+
+        Alert.alert("Berhasil!", "Presensi sukses dicatat ke database.", [
+          {
+            text: "Lihat Riwayat",
+            onPress: () => navigation.navigate("HistoryTab"),
+          },
+        ]);
+      } else {
+        Alert.alert("Gagal", result.message || "Terjadi kesalahan di server.");
+      }
+    } catch (error) {
+      Alert.alert(
+        "Error Jaringan",
+        "Pastikan IP laptop benar dan API Spring Boot berjalan.",
+      );
+      console.log(error);
+    } finally {
+      // Reset agar siap scan lagi
+      setIsScanning(true);
+      setScannedData(null);
+    }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.headerRow}>
-          <Text style={styles.title}>Attendance App</Text>
-          <Text style={styles.clockText}>{currentTime}</Text>
+    <View style={styles.container}>
+      <CameraView
+        style={StyleSheet.absoluteFillObject}
+        facing="back"
+        onBarcodeScanned={isScanning ? handleBarCodeScanned : undefined}
+        barcodeScannerSettings={{
+          barcodeTypes: ["qr"],
+        }}
+      />
 
-          <TouchableOpacity onPress={logout} style={styles.logoutButton}>
-            <Text style={styles.logoutText}>Logout</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Student Card */}
-        <View style={styles.card}>
-          <View style={styles.icon}>
-            <MaterialIcons name="person" size={40} color="#555" />
-          </View>
-          <View>
-            <Text style={styles.name}>
-              {userData?.mhsName || "Budi Susanto"}
+      {/* Overlay kotak scanner */}
+      <View style={styles.overlay}>
+        <View style={styles.unfocusedContainer}>
+          <View style={styles.topBar}>
+            <Text style={styles.userText}>
+              {userData?.mhsName || "Mahasiswa"}
             </Text>
-            <Text>NIM : {userData?.mhsNim || "0325260031"}</Text>
-            <Text>Class : {userData?.prodi || "Informatika-2B"}</Text>
+
+            <TouchableOpacity onPress={logout} style={styles.logoutButton}>
+              <Text style={styles.logoutText}>Logout</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
-        {/* Today's Class */}
-        <View style={styles.classCard}>
-          <Text style={styles.subtitle}>Today's Class</Text>
-          <Text>Mobile Programming</Text>
-          <Text>08:00 - 10:00</Text>
-          <Text>Lab 3</Text>
+        <View style={styles.focusedContainer}>
+          <View style={styles.borderCornerTopLeft} />
+          <View style={styles.borderCornerTopRight} />
+          <View style={styles.borderCornerBottomLeft} />
+          <View style={styles.borderCornerBottomRight} />
+        </View>
 
-          {!isCheckedIn && (
-            <TextInput
-              ref={noteInputRef}
-              style={styles.inputCatatan}
-              placeholder="Tulis catatan (cth: Hadir lab)"
-              value={note}
-              onChangeText={setNote}
+        <View style={styles.unfocusedContainer}>
+          <Text style={styles.scanText}>Arahkan Kamera ke QR Code Dosen</Text>
+
+          {!isScanning && (
+            <Button
+              title="Scan Lagi"
+              onPress={() => setIsScanning(true)}
+              color="#ffc107"
             />
           )}
 
-          <TouchableOpacity
-            style={[
-              styles.button,
-              isCheckedIn ? styles.buttonDisabled : styles.buttonActive,
-            ]}
-            onPress={handleCheckIn}
-            disabled={isCheckedIn}
-          >
-            <Text style={styles.buttonText}>
-              {isCheckedIn ? "CHECKED IN" : "CHECK IN"}
-            </Text>
-          </TouchableOpacity>
+          {isCheckedIn && (
+            <Text style={styles.successText}>Presensi berhasil dicatat</Text>
+          )}
         </View>
-
-        {/* Statistik Kehadiran */}
-        <View style={styles.statsCard}>
-          <View style={styles.statBox}>
-            <Text style={styles.statNumber}>
-              {attendanceStats.totalPresent}
-            </Text>
-            <Text style={styles.statLabel}>Total Present</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={[styles.statNumber, { color: "red" }]}>
-              {attendanceStats.totalAbsent}
-            </Text>
-            <Text style={styles.statLabel}>Total Absent</Text>
-          </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f5f5f5",
+    backgroundColor: "black",
   },
 
-  content: {
-    padding: 20,
-    paddingBottom: 40,
-  },
-
-  title: {
-    fontSize: 24,
-    fontWeight: "bold",
-  },
-
-  headerRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-
-  clockText: {
+  infoText: {
+    color: "white",
+    textAlign: "center",
+    margin: 30,
     fontSize: 16,
-    fontWeight: "bold",
-    color: "#007AFF",
-    fontVariant: ["tabular-nums"],
   },
 
-  card: {
-    flexDirection: "row",
-    backgroundColor: "white",
+  buttonRequest: {
+    backgroundColor: "#0056b3",
     padding: 15,
     borderRadius: 10,
-    marginBottom: 20,
-  },
-
-  icon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#fee",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 15,
-  },
-
-  name: {
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-
-  classCard: {
-    backgroundColor: "white",
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 20,
-  },
-
-  subtitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 10,
-  },
-
-  button: {
-    marginTop: 10,
-    padding: 10,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-
-  buttonActive: {
-    backgroundColor: "#007AFF",
-  },
-
-  buttonDisabled: {
-    backgroundColor: "#A0C4FF",
+    alignSelf: "center",
   },
 
   buttonText: {
@@ -213,87 +225,65 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 
-  item: {
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+
+  unfocusedContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  focusedContainer: {
+    width: 250,
+    height: 250,
+    alignSelf: "center",
+    backgroundColor: "transparent",
+    position: "relative",
+  },
+
+  scanText: {
+    color: "white",
+    fontSize: 16,
+    marginTop: 20,
+    fontWeight: "bold",
+    backgroundColor: "rgba(0,0,0,0.7)",
+    padding: 10,
+    borderRadius: 5,
+  },
+
+  successText: {
+    color: "#00ff99",
+    fontSize: 14,
+    marginTop: 15,
+    fontWeight: "bold",
+  },
+
+  topBar: {
+    position: "absolute",
+    top: 40,
+    left: 20,
+    right: 20,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "white",
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
   },
 
-  course: {
+  userText: {
+    color: "white",
+    fontWeight: "bold",
     fontSize: 16,
-    fontWeight: "500",
-  },
-
-  date: {
-    fontSize: 12,
-    color: "gray",
-    marginTop: 2,
-  },
-
-  noteHistory: {
-    fontSize: 12,
-    color: "#555",
-    marginTop: 4,
-    fontStyle: "italic",
-  },
-
-  statusContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  present: {
-    color: "green",
-    fontWeight: "bold",
-  },
-
-  absent: {
-    color: "red",
-    fontWeight: "bold",
-  },
-
-  inputCatatan: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    padding: 10,
-    marginTop: 15,
-    backgroundColor: "#fafafa",
-  },
-
-  statsCard: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    backgroundColor: "white",
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 20,
-  },
-
-  statBox: {
-    alignItems: "center",
-  },
-
-  statNumber: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "green",
-  },
-
-  statLabel: {
-    fontSize: 14,
-    color: "gray",
+    backgroundColor: "rgba(0,0,0,0.5)",
+    padding: 8,
+    borderRadius: 6,
   },
 
   logoutButton: {
-    marginLeft: 12,
     backgroundColor: "#d9534f",
-    paddingVertical: 4,
-    paddingHorizontal: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     borderRadius: 6,
   },
 
@@ -302,6 +292,48 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     fontSize: 12,
   },
-});
 
-export default HomeScreen;
+  borderCornerTopLeft: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: 40,
+    height: 40,
+    borderTopWidth: 5,
+    borderLeftWidth: 5,
+    borderColor: "#007bff",
+  },
+
+  borderCornerTopRight: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: 40,
+    height: 40,
+    borderTopWidth: 5,
+    borderRightWidth: 5,
+    borderColor: "#007bff",
+  },
+
+  borderCornerBottomLeft: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    width: 40,
+    height: 40,
+    borderBottomWidth: 5,
+    borderLeftWidth: 5,
+    borderColor: "#007bff",
+  },
+
+  borderCornerBottomRight: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 40,
+    height: 40,
+    borderBottomWidth: 5,
+    borderRightWidth: 5,
+    borderColor: "#007bff",
+  },
+});
