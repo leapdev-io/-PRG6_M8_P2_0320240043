@@ -11,6 +11,7 @@ import LoginScreen from "./pages/LoginScreen";
 import HomeScreen from "./pages/HomeScreen";
 import HistoryScreen from "./pages/HistoryScreen";
 import DetailScreen from "./pages/DetailScreen";
+import AboutScreen from "./pages/AboutScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -59,6 +60,17 @@ function AppTabs() {
           tabBarLabel: "Riwayat",
           tabBarIcon: ({ color }) => (
             <MaterialIcons name="history" size={24} color={color} />
+          ),
+        }}
+      />
+
+      <Tab.Screen
+        name="AboutTab"
+        component={AboutScreen}
+        options={{
+          tabBarLabel: "Profil",
+          tabBarIcon: ({ color }) => (
+            <MaterialIcons name="person" size={24} color={color} />
           ),
         }}
       />
