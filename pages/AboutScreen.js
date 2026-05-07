@@ -6,64 +6,108 @@ import {
   Image,
   TouchableOpacity,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function AboutScreen() {
   // 1. Kumpulan State
   const [permission, requestPermission] = useCameraPermissions();
   const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [profilePhoto, setProfilePhoto] = useState(null);
+  const [mahasiswa, setMahasiswa] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Referensi untuk memicu jepretan kamera
   const cameraRef = useRef(null);
 
-  // Kunci unik untuk menyimpan data di memori HP
-  const STORAGE_KEY = "@profile_photo";
+  const NIM_USER = "0325260031"; // Simulasi NIM Mahasiswa
+  const BASE_URL = "http://10.1.13.14:8080/api/mahasiswa";
 
-  // 2. Load Foto dari Memori Lokal saat halaman pertama kali dibuka
+  // 2. Load Foto dari API
   useEffect(() => {
-    loadProfilePhoto();
+    fetchMahasiswa();
   }, []);
-
-  const loadProfilePhoto = async () => {
-    try {
-      const savedPhotoUri = await AsyncStorage.getItem(STORAGE_KEY);
-      if (savedPhotoUri !== null) {
-        setProfilePhoto(savedPhotoUri);
-      }
-    } catch (error) {
-      console.error("Gagal memuat foto profil", error);
-    }
-  };
 
   // 3. Fungsi untuk Mengambil Foto
   const takePicture = async () => {
     if (cameraRef.current) {
-      try {
-        // Jepret foto dengan kualitas rendah agar tidak membebani memori
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.5,
-        });
-
-        // Simpan URI foto ke state
-        setProfilePhoto(photo.uri);
-
-        // Simpan URI foto ke Local Storage (AsyncStorage)
-        await AsyncStorage.setItem(STORAGE_KEY, photo.uri);
-
-        // Tutup layar kamera kembali ke profil
-        setIsCameraOpen(false);
-
-        Alert.alert("Berhasil", "Foto profil berhasil diperbarui!");
-      } catch (error) {
-        Alert.alert("Error", "Gagal mengambil foto selfie.");
-      }
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.3 });
+      uploadPhoto(photo.uri);
     }
   };
 
-  // 4. Handle Rendering UI Kamera
+  // 4. GET DATA DARI API
+  const fetchMahasiswa = async () => {
+    try {
+      const response = await fetch(`${BASE_URL}/${NIM_USER}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        setMahasiswa(data);
+      } else if (response.status === 404) {
+        Alert.alert(
+          "Data Tidak Ditemukan",
+          `Mahasiswa dengan NIM ${NIM_USER} tidak ditemukan di database.`,
+        );
+        setMahasiswa(null);
+      } else {
+        Alert.alert(
+          "Terjadi Kesalahan",
+          `Gagal mengambil data mahasiswa. Status: ${response.status}`,
+        );
+      }
+    } catch (error) {
+      Alert.alert(
+        "Koneksi Bermasalah",
+        "Aplikasi tidak dapat terhubung ke server. Pastikan backend aktif dan IP sudah benar.",
+      );
+      console.error(error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 5. UPLOAD FOTO KE API (Multipart Form Data)
+  const uploadPhoto = async (uri) => {
+    setIsLoading(true);
+
+    // Buat objek FormData (Standar untuk Upload File)
+    const formData = new FormData();
+    formData.append("nim", NIM_USER);
+    formData.append("nama", "Rudi Hartono"); // Contoh nama
+
+    // Membungkus URI foto menjadi file agar dikenali oleh Java Spring
+    formData.append("foto", {
+      uri: uri,
+      name: "selfie.jpg",
+      type: "image/jpeg",
+    });
+
+    try {
+      const response = await fetch(`${BASE_URL}/upload`, {
+        method: "POST",
+        body: formData,
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
+
+      if (response.ok) {
+        Alert.alert("Sukses", "Foto profil tersinkronisasi ke Server!");
+        fetchMahasiswa(); // Refresh data
+      }
+    } catch (error) {
+      Alert.alert("Error", "Gagal mengunggah foto ke server.");
+    } finally {
+      setIsLoading(false);
+      setIsCameraOpen(false);
+    }
+  };
+
+  // 6. RENDER UI
+  if (isLoading) return <ActivityIndicator size="large" style={{ flex: 1 }} />;
+
+  // 7. Handle Rendering UI Kamera
   if (isCameraOpen) {
     if (!permission)
       return (
@@ -101,64 +145,52 @@ export default function AboutScreen() {
           ref={cameraRef}
         >
           <View style={styles.cameraOverlay}>
-            <View style={styles.captureContainer}>
-              <TouchableOpacity
-                style={styles.captureButton}
-                onPress={takePicture}
-              >
-                <Text style={styles.captureButtonText}>Jepret</Text>
-              </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.captureButton}
+              onPress={takePicture}
+            >
+              <Text style={styles.captureButtonText}>Ambil & Kirim</Text>
+            </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setIsCameraOpen(false)}
-              >
-                <Text style={styles.buttonText}>Batal</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity onPress={() => setIsCameraOpen(false)}>
+              <Text style={{ color: "white", marginBottom: 20 }}>Batal</Text>
+            </TouchableOpacity>
           </View>
         </CameraView>
       </View>
     );
   }
 
-  // 5. Handle Rendering UI Halaman About (Profil)
+  // 8. Handle Rendering UI Halaman About (Profil)
   return (
     <View style={styles.container}>
       <View style={styles.profileCard}>
-        {/* Area Foto Profil */}
-        <View style={styles.imageContainer}>
-          {profilePhoto ? (
-            <Image source={{ uri: profilePhoto }} style={styles.profileImage} />
-          ) : (
-            <View style={styles.placeholderImage}>
-              <Text style={styles.placeholderText}>Belum Ada Foto</Text>
-            </View>
-          )}
-        </View>
+        {/* Konversi byte[] (Blob) dari API menjadi Base64 agar tampil di <Image> */}
+        <Image
+          source={
+            mahasiswa?.fotoMhs
+              ? { uri: `data:image/jpeg;base64,${mahasiswa.fotoMhs}` }
+              : // Gunakan URI gambar online sebagai Fallback jika foto kosong
+                { uri: "https://i.pravatar.cc/150?img=3" }
+          }
+          style={styles.profileImage}
+        />
 
-        {/* Informasi Mahasiswa */}
-        <Text style={styles.nameText}>Budi Santoso</Text>
-        <Text style={styles.nimText}>NIM: 0325260031</Text>
-        <Text style={styles.programText}>
-          Teknologi Rekayasa Perangkat Lunak
-        </Text>
+        <Text style={styles.nameText}>{mahasiswa?.namaMhs || "Mahasiswa"}</Text>
+        <Text style={styles.nimText}>{NIM_USER}</Text>
 
-        {/* Tombol Aksi */}
         <TouchableOpacity
           style={styles.button}
           onPress={() => setIsCameraOpen(true)}
         >
-          <Text style={styles.buttonText}>
-            {profilePhoto ? "Ganti Foto Profil" : "Ambil Foto Profil"}
-          </Text>
+          <Text style={styles.buttonText}>Ganti Foto Selfie</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-// 6. Styling Komponen
+// 9. Styling Komponen
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -166,133 +198,54 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-
-  // --- Styles untuk Halaman Profil ---
   profileCard: {
     backgroundColor: "white",
     width: "85%",
     padding: 30,
     borderRadius: 20,
     alignItems: "center",
-    elevation: 5, // Shadow untuk Android
-    shadowColor: "#000", // Shadow untuk iOS
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
+    elevation: 5,
   },
-
-  imageContainer: {
-    marginBottom: 20,
-  },
-
   profileImage: {
     width: 150,
     height: 150,
     borderRadius: 75,
-    borderWidth: 3,
+    marginBottom: 20,
+    borderWidth: 2,
     borderColor: "#0056b3",
   },
-
-  placeholderImage: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: "#e9ecef",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 3,
-    borderColor: "#ced4da",
-    borderStyle: "dashed",
-  },
-
-  placeholderText: {
-    color: "#6c757d",
-    fontWeight: "bold",
-  },
-
   nameText: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: "bold",
-    color: "#333",
-    marginBottom: 5,
   },
-
   nimText: {
     fontSize: 16,
-    color: "#666",
-    marginBottom: 5,
+    color: "gray",
+    marginBottom: 20,
   },
-
-  programText: {
-    fontSize: 14,
-    color: "#0056b3",
-    fontWeight: "bold",
-    marginBottom: 25,
-    textAlign: "center",
-  },
-
   button: {
     backgroundColor: "#0056b3",
-    paddingVertical: 12,
-    paddingHorizontal: 25,
+    padding: 12,
     borderRadius: 10,
     width: "100%",
     alignItems: "center",
   },
-
-  buttonDanger: {
-    backgroundColor: "#dc3545",
-    paddingVertical: 12,
-    paddingHorizontal: 25,
-    borderRadius: 10,
-    width: "100%",
-    alignItems: "center",
-    marginTop: 10,
-  },
-
   buttonText: {
     color: "white",
     fontWeight: "bold",
-    fontSize: 16,
   },
-
-  infoText: {
-    textAlign: "center",
-    marginBottom: 20,
-    fontSize: 16,
-  },
-
-  // --- Styles untuk Layar Kamera ---
   cameraOverlay: {
     flex: 1,
-    backgroundColor: "transparent",
     justifyContent: "flex-end",
-  },
-
-  captureContainer: {
-    flexDirection: "row",
-    justifyContent: "space-evenly",
     alignItems: "center",
-    marginBottom: 40,
   },
-
   captureButton: {
     backgroundColor: "white",
-    paddingVertical: 15,
-    paddingHorizontal: 30,
+    padding: 15,
     borderRadius: 30,
-    elevation: 5,
+    marginBottom: 20,
   },
-
   captureButtonText: {
-    fontSize: 18,
     fontWeight: "bold",
-    color: "black",
-  },
-
-  cancelButton: {
-    backgroundColor: "rgba(0,0,0,0.6)",
-    paddingVertical: 15,
-    paddingHorizontal: 30,
-    borderRadius: 30,
   },
 });
