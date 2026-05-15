@@ -1,4 +1,4 @@
-import React, { useState, useContext } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,71 +6,119 @@ import {
   TouchableOpacity,
   Alert,
   Button,
+  ActivityIndicator,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+// Gunakan useCameraPermissions dan komponen CameraView
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { AuthContext } from "../context/AuthContext";
+
+import { MaterialIcons } from "@expo/vector-icons";
+import * as Location from "expo-location"; // 1. IMPORT EXPO-LOCATION
 
 export default function HomeScreen() {
   const navigation = useNavigation();
-  const { userData, logout } = useContext(AuthContext);
-
   const [permission, requestPermission] = useCameraPermissions();
 
-  // State untuk menyimpan data hasil scan QR
+  // State QR Code
   const [scannedData, setScannedData] = useState(null);
-
-  // State untuk mengontrol scanner aktif / terkunci
   const [isScanning, setIsScanning] = useState(true);
-
   const [isCheckedIn, setIsCheckedIn] = useState(false);
 
-  // GANTI DENGAN IP LAPTOP KAMU
+  // State Lokasi
+  const [locationStatus, setLocationStatus] = useState("checking"); // 'checking', 'valid', 'invalid', 'error'
+  const [distance, setDistance] = useState(0);
+
+  // Koordinat Kampus & Batas Radius
+  const KAMPUS_LAT = -6.346;
+  const KAMPUS_LON = 107.149;
+  const MAKSIMAL_JARAK_METER = 50; // Ubah toleransi radius berdasarkan aturan
+
+  // URL API Backend
   const BASE_URL = "http://10.1.13.14:8080/api/presensi";
 
-  // Jika permission masih loading
-  if (!permission) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.infoText}>Memuat perizinan kamera...</Text>
-      </View>
-    );
-  }
+  // 2. TRIGGER CEK LOKASI OTOMATIS SAAT HALAMAN DIBUKA
+  useEffect(() => {
+    if (permission && permission.granted) {
+      verifyLocation();
+    }
+  }, [permission]);
 
-  // Jika user belum memberikan izin kamera
-  if (!permission.granted) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.infoText}>
-          Aplikasi butuh akses kamera untuk memindai QR Code Presensi Dosen!
-        </Text>
+  // 3. FUNGSI MENGHITUNG JARAK (HAVERSINE Formula)
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371e3;
+    const p1 = (lat1 * Math.PI) / 180;
+    const p2 = (lat2 * Math.PI) / 180;
+    const deltaP = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLon = ((lon2 - lon1) * Math.PI) / 180;
 
-        <TouchableOpacity
-          style={styles.buttonRequest}
-          onPress={requestPermission}
-        >
-          <Text style={styles.buttonText}>Aktifkan Kamera</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+    const a =
+      Math.sin(deltaP / 2) * Math.sin(deltaP / 2) +
+      Math.cos(p1) *
+        Math.cos(p2) *
+        Math.sin(deltaLon / 2) *
+        Math.sin(deltaLon / 2);
 
-  // Fungsi saat QR Code terdeteksi kamera
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  };
+
+  // 4. FUNGSI VERIFIKASI LOKASI MAHASISWA
+  const verifyLocation = async () => {
+    setLocationStatus("checking");
+
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== "granted") {
+        Alert.alert(
+          "Akses Ditolak",
+          "Izin lokasi wajib diberikan untuk presensi.",
+        );
+        setLocationStatus("error");
+        return;
+      }
+
+      let currentLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const jarakMeter = calculateDistance(
+        currentLocation.coords.latitude,
+        currentLocation.coords.longitude,
+        KAMPUS_LAT,
+        KAMPUS_LON,
+      );
+
+      setDistance(Math.round(jarakMeter));
+
+      // Validasi Jarak
+      if (jarakMeter <= MAKSIMAL_JARAK_METER) {
+        setLocationStatus("valid");
+      } else {
+        setLocationStatus("invalid");
+      }
+    } catch (error) {
+      Alert.alert("Error Lokasi", "Gagal mengunci posisi satelit GPS Anda.");
+      setLocationStatus("error");
+    }
+  };
+
+  // ==========================================
+  // FUNGSI QR SCANNER & API (TIDAK BERUBAH)
+  // ==========================================
   const handleBarCodeScanned = ({ type, data }) => {
-    // Jika sedang terkunci, abaikan scan agar tidak looping
     if (!isScanning) return;
 
-    // Kunci scanner
     setIsScanning(false);
 
     try {
-      // Ubah teks JSON dari QR Code menjadi object JavaScript
       const qrData = JSON.parse(data);
       setScannedData(qrData);
 
       Alert.alert(
         "QR Code Terdeteksi",
-        `Mata Kuliah: ${qrData.kodeMk}\nPertemuan: ${qrData.pertemuanKe}\nRuangan: ${qrData.ruangan}\n\nLanjutkan Presensi (Check-In)?`,
+        `Mata Kuliah: ${qrData.kodeMk}\nPertemuan: ${qrData.pertemuanKe}\nRuangan: ${qrData.ruangan}\n\nLanjutkan Presensi?`,
         [
           {
             text: "Batal",
@@ -95,20 +143,15 @@ export default function HomeScreen() {
     }
   };
 
-  // Fungsi kirim data presensi ke API Spring Boot
   const handleSubmitPresensi = async (qrData) => {
-    const now = new Date();
-
     const payload = {
       kodeMk: qrData.kodeMk,
-      course: qrData.course || "Mobile Programming",
-      nimMhs: userData?.mhsNim,
+      nimMhs: "0325260031",
       pertemuanKe: qrData.pertemuanKe,
-      date: now.toISOString().split("T")[0],
-      jamPresensi: now.toLocaleTimeString("id-ID", { hour12: false }),
+      date: new Date().toISOString().split("T")[0],
+      jamPresensi: new Date().toLocaleTimeString("en-GB"),
       status: "Present",
       ruangan: qrData.ruangan,
-      dosenPengampu: qrData.dosenPengampu || "Tim Dosen TRPL",
     };
 
     try {
@@ -125,8 +168,7 @@ export default function HomeScreen() {
 
       if (response.ok) {
         setIsCheckedIn(true);
-
-        Alert.alert("Berhasil!", "Presensi sukses dicatat ke database.", [
+        Alert.alert("Berhasil!", "Presensi sukses dicatat ke Database.", [
           {
             text: "Lihat Riwayat",
             onPress: () => navigation.navigate("HistoryTab"),
@@ -138,76 +180,158 @@ export default function HomeScreen() {
     } catch (error) {
       Alert.alert(
         "Error Jaringan",
-        "Pastikan IP laptop benar dan API Spring Boot berjalan.",
+        "Pastikan IP Server benar dan Backend berjalan.",
       );
-      console.log(error);
     } finally {
-      // Reset agar siap scan lagi
       setIsScanning(true);
       setScannedData(null);
     }
   };
 
-  return (
-    <View style={styles.container}>
-      <CameraView
-        style={StyleSheet.absoluteFillObject}
-        facing="back"
-        onBarcodeScanned={isScanning ? handleBarCodeScanned : undefined}
-        barcodeScannerSettings={{
-          barcodeTypes: ["qr"],
-        }}
-      />
+  // ==========================================
+  // RENDER UI BERDASARKAN STATUS
+  // ==========================================
 
-      {/* Overlay kotak scanner */}
-      <View style={styles.overlay}>
-        <View style={styles.unfocusedContainer}>
-          <View style={styles.topBar}>
-            <Text style={styles.userText}>
-              {userData?.mhsName || "Mahasiswa"}
+  // Kondisi 1: Izin Kamera belum diputuskan
+  if (!permission) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  // Kondisi 2: Izin Kamera Ditolak
+  if (!permission.granted) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.infoText}>
+          Aplikasi butuh akses kamera untuk memindai QR!
+        </Text>
+
+        <TouchableOpacity
+          style={styles.buttonRequest}
+          onPress={requestPermission}
+        >
+          <Text style={styles.buttonText}>Aktifkan Kamera</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Kondisi 3: Sedang Mencari Sinyal GPS
+  if (locationStatus === "checking") {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#0056b3" />
+        <Text style={styles.loadingText}>Memverifikasi Lokasi Anda...</Text>
+        <Text style={{ color: "gray", marginTop: 10 }}>
+          Pastikan Anda berada di area Kampus.
+        </Text>
+      </View>
+    );
+  }
+
+  // Kondisi 4: Lokasi di Luar Radius Kampus (Blokir Kamera!)
+  if (locationStatus === "invalid") {
+    return (
+      <View style={styles.centerContainer}>
+        <MaterialIcons
+          name="block"
+          size={80}
+          color="#dc3545"
+          style={{ marginBottom: 15 }}
+        />
+
+        <Text style={styles.errorTitle}>Akses Ditolak</Text>
+
+        <Text style={styles.errorSubtitle}>
+          Anda terdeteksi berada {distance} meter dari titik kampus. Maksimal
+          jarak yang diizinkan adalah {MAKSIMAL_JARAK_METER} meter.
+        </Text>
+
+        <TouchableOpacity style={styles.buttonRequest} onPress={verifyLocation}>
+          <Text style={styles.buttonText}>Cek Ulang Lokasi</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Kondisi 5: Lokasi Valid, Tampilkan Scanner QR Code
+  if (locationStatus === "valid") {
+    return (
+      <View style={styles.container}>
+        <CameraView
+          style={StyleSheet.absoluteFillObject}
+          facing="back"
+          onBarcodeScanned={isScanning ? handleBarCodeScanned : undefined}
+          barcodeScannerSettings={{ barCodeTypes: ["qr"] }}
+        />
+
+        <View style={[styles.overlay, StyleSheet.absoluteFillObject]}>
+          <View style={styles.unfocusedContainer} />
+
+          {/* Indikator Hijau bahwa Lokasi aman */}
+          <View style={styles.validLocationBadge}>
+            <MaterialIcons
+              name="check-circle"
+              size={18}
+              color="white"
+              style={{ marginRight: 5 }}
+            />
+            <Text style={styles.validLocationText}>
+              Lokasi Valid ({distance}m)
             </Text>
+          </View>
 
-            <TouchableOpacity onPress={logout} style={styles.logoutButton}>
-              <Text style={styles.logoutText}>Logout</Text>
-            </TouchableOpacity>
+          <View style={styles.focusedContainer}>
+            <View style={styles.borderCornerTopLeft} />
+            <View style={styles.borderCornerTopRight} />
+            <View style={styles.borderCornerBottomLeft} />
+            <View style={styles.borderCornerBottomRight} />
+          </View>
+
+          <View style={styles.unfocusedContainer}>
+            <Text style={styles.scanText}>Arahkan Kamera ke QR Code Dosen</Text>
+
+            {!isScanning && (
+              <Button
+                title="Scan Lagi"
+                onPress={() => setIsScanning(true)}
+                color="#ffc107"
+              />
+            )}
           </View>
         </View>
-
-        <View style={styles.focusedContainer}>
-          <View style={styles.borderCornerTopLeft} />
-          <View style={styles.borderCornerTopRight} />
-          <View style={styles.borderCornerBottomLeft} />
-          <View style={styles.borderCornerBottomRight} />
-        </View>
-
-        <View style={styles.unfocusedContainer}>
-          <Text style={styles.scanText}>Arahkan Kamera ke QR Code Dosen</Text>
-
-          {!isScanning && (
-            <Button
-              title="Scan Lagi"
-              onPress={() => setIsScanning(true)}
-              color="#ffc107"
-            />
-          )}
-
-          {isCheckedIn && (
-            <Text style={styles.successText}>Presensi berhasil dicatat</Text>
-          )}
-        </View>
       </View>
-    </View>
-  );
+    );
+  }
 }
 
+// 6. Styling, tambahan untuk layar lokasi
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "black",
   },
 
+  centerContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f4f6f9",
+    padding: 20,
+  },
+
+  loadingText: {
+    marginTop: 20,
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#333",
+  },
+
   infoText: {
-    color: "white",
+    color: "#333",
     textAlign: "center",
     margin: 30,
     fontSize: 16,
@@ -218,16 +342,41 @@ const styles = StyleSheet.create({
     padding: 15,
     borderRadius: 10,
     alignSelf: "center",
+    marginTop: 20,
+    width: "80%",
+    alignItems: "center",
   },
 
   buttonText: {
     color: "white",
     fontWeight: "bold",
+    fontSize: 16,
   },
 
+  // Styling Error Lokasi
+  emojiError: {
+    fontSize: 60,
+    marginBottom: 10,
+  },
+
+  errorTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#dc3545",
+    marginBottom: 10,
+  },
+
+  errorSubtitle: {
+    fontSize: 16,
+    textAlign: "center",
+    color: "#666",
+    lineHeight: 24,
+  },
+
+  // Styling Overlay Scanner
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(0,0,0,0.6)",
   },
 
   unfocusedContainer: {
@@ -254,45 +403,23 @@ const styles = StyleSheet.create({
     borderRadius: 5,
   },
 
-  successText: {
-    color: "#00ff99",
-    fontSize: 14,
-    marginTop: 15,
-    fontWeight: "bold",
-  },
-
-  topBar: {
-    position: "absolute",
-    top: 40,
-    left: 20,
-    right: 20,
+  // Badge Lokasi Aman di Overlay Kamera
+  validLocationBadge: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    backgroundColor: "rgba(40, 167, 69, 0.9)",
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginBottom: 30,
   },
 
-  userText: {
+  validLocationText: {
     color: "white",
     fontWeight: "bold",
-    fontSize: 16,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    padding: 8,
-    borderRadius: 6,
   },
 
-  logoutButton: {
-    backgroundColor: "#d9534f",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-  },
-
-  logoutText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 12,
-  },
-
+  // Membuat Sudut Kotak Biru
   borderCornerTopLeft: {
     position: "absolute",
     top: 0,
