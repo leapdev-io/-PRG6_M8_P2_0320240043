@@ -9,6 +9,3 @@ You are allowed to read and study the source code for learning purposes only.
 
 This is a custom non-official academic license and has no legal force.  
 It is included for documentation purposes only.
-=======
-
-# PRG6_M5_P2_0320240043
